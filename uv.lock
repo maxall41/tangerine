@@ -2914,6 +2914,7 @@ dependencies = [
     { name = "scipy" },
     { name = "segmentation-models-pytorch" },
     { name = "slideflow" },
+    { name = "tifffile" },
     { name = "torch" },
     { name = "torchvision" },
 ]
@@ -2927,6 +2928,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.16.2" },
     { name = "segmentation-models-pytorch", specifier = ">=0.5.0" },
     { name = "slideflow", specifier = ">=3.0.2" },
+    { name = "tifffile", specifier = ">=2025.10.4" },
     { name = "torch", specifier = ">=2.8.0" },
     { name = "torchvision", specifier = ">=0.23.0" },
 ]

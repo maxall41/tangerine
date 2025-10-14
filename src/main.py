@@ -14,6 +14,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     import numpy as np
+    import tifffile
     from PIL import Image, ImageDraw
     from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QThread, pyqtSignal
     from PyQt6.QtGui import QAction, QColor, QPainterPath, QPen, QPixmap
@@ -53,7 +54,7 @@ if __name__ == "__main__":
                 mask = remove_small_holes(mask, area_threshold=1000)
                 mask = remove_small_objects(mask, min_size=2000)
 
-                Image.fromarray((mask * 255).astype(np.uint8)).save("raw_mask.png")
+                # Image.fromarray((mask * 255).astype(np.uint8)).save("raw_mask.png")
 
                 # Threshold the predictions.
                 labeled = label(mask)
@@ -236,6 +237,10 @@ if __name__ == "__main__":
             self.scene.setSceneRect(QRectF(0, 0, pix.width(), pix.height()))
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.update_actions()
+
+            with tifffile.TiffFile(path) as tif:
+                data = tif.asarray()
+            tifffile.imwrite(path, data, extratags=[(65326, "s", 0, "1", True)])
 
         def toggle_draw_mode(self):
             if self.image_array is None:

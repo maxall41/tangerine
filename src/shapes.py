@@ -1,4 +1,3 @@
-import pickle
 from multiprocessing import Pool, cpu_count
 
 import cv2
@@ -397,8 +396,8 @@ def outlines_list(masks: np.ndarray) -> list[np.ndarray]:
                 else:
                     outpix.append(np.zeros((0, 2)))
 
-    with open("polygons.pkl", "wb") as f:
-        pickle.dump(outpix, f)
+    # with open("polygons.pkl", "wb") as f:
+    #     pickle.dump(outpix, f)
     return polygons_to_ring_structure(
         split_bridged_polygons(
             outpix,
