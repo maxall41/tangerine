@@ -1,0 +1,17 @@
+{
+ "params": {
+  "arch": "deeplabv3plus",
+  "encoder_name": "resnet34",
+  "in_channels": 3,
+  "out_classes": 1,
+  "lr": 0.0001,
+  "loss": "dice",
+  "mode": "binary"
+ },
+ "mpp": 1,
+ "size": 1024,
+ "train_batch_size": 8,
+ "val_batch_size": 16,
+ "epochs": 40,
+ "labels": null
+}
