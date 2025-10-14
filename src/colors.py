@@ -2,7 +2,6 @@ import copy
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image
 from scipy import ndimage as ndi
 from skimage.color import hed2rgb, rgb2hed
 from skimage.feature import peak_local_max
@@ -129,26 +128,27 @@ def quantify_oil_red_o_stain(
     if uncropped_image is None:
         uncropped_image = cropped_image
 
-    im = Image.fromarray(cropped_image)
-    im.save("raw_image.tif")
+    # im = Image.fromarray(cropped_image)
+    # im.save("raw_image.tif")
+
     heamtoxylin, heamtoxylin_mask = extract_heamtoxylin(uncropped_image)
     original_image = copy.deepcopy(cropped_image)
     cropped_image[heamtoxylin_mask] = [0, 0, 0]
 
-    im = Image.fromarray((heamtoxylin * 255).astype(np.uint8))
-    im.save("hematoxylin_rgb.tif")
+    # im = Image.fromarray((heamtoxylin * 255).astype(np.uint8))
+    # im.save("hematoxylin_rgb.tif")
 
-    im = Image.fromarray(cropped_image)
-    im.save("oilred_o_pre_white.tif")
+    # im = Image.fromarray(cropped_image)
+    # im.save("oilred_o_pre_white.tif")
 
     epithelial_bkg, threshold, min_brightness = remove_white_background_adaptive(original_image)  # threshold 141.0
     cropped_image = remove_white_background(cropped_image, threshold, min_brightness)
 
-    im = Image.fromarray(cropped_image)
-    im.save("oilred_o.tif")
+    # im = Image.fromarray(cropped_image)
+    # im.save("oilred_o.tif")
 
-    im = Image.fromarray(heamtoxylin_mask)
-    im.save("heamtoxylin_mask.tif")
+    # im = Image.fromarray(heamtoxylin_mask)
+    # im.save("heamtoxylin_mask.tif")
 
     mask = np.dot(cropped_image[..., :3], [0.2989, 0.5870, 0.1140])
     mask = mask > 1

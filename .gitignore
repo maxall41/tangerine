@@ -12,3 +12,4 @@ wheels/
 # Other
 segmentation_rois/
 results/
+slideflow.log

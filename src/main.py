@@ -14,153 +14,28 @@ if __name__ == "__main__":
     from pathlib import Path
 
     import numpy as np
-    import torch
     from PIL import Image, ImageDraw
     from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QThread, pyqtSignal
-    from PyQt6.QtGui import QAction, QColor, QImage, QPainterPath, QPen, QPixmap, QPolygonF
+    from PyQt6.QtGui import QAction, QColor, QPainterPath, QPen, QPixmap
     from PyQt6.QtWidgets import (
         QApplication,
-        QDialog,
         QFileDialog,
-        QGraphicsItem,
         QGraphicsPathItem,
         QGraphicsPixmapItem,
-        QGraphicsPolygonItem,
         QGraphicsRectItem,
         QGraphicsScene,
-        QGraphicsView,
-        QHBoxLayout,
-        QLabel,
         QMainWindow,
         QMessageBox,
-        QPushButton,
-        QStyle,
         QToolBar,
-        QVBoxLayout,
     )
     from scipy.ndimage import label
-    from skimage.color import label2rgb
     from skimage.measure import approximate_polygon, label
     from skimage.morphology import remove_small_holes, remove_small_objects
-    from slideflow import segment
 
     from colors import quantify_oil_red_o_stain
+    from gui import GraphicsView, PolygonROI, ProgressDialog
     from shapes import outlines_list, polygon_area
-    from waitingspinnerwidget import QtWaitingSpinner
-
-    class ProgressDialog(QDialog):
-        cancelled = pyqtSignal()
-
-        def __init__(self, parent, title, text):
-            super().__init__(parent)
-            self.setWindowTitle(title)
-            self.setModal(True)
-            self.setFixedSize(400, 160)
-            self.setWindowFlags(
-                Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint,
-            )
-
-            layout = QVBoxLayout()
-            layout.setSpacing(15)
-            layout.setContentsMargins(20, 20, 20, 20)
-
-            self.label = QLabel(text)
-            layout.addWidget(self.label)
-
-            self.spinner = QtWaitingSpinner(self)
-
-            self.spinner.setRoundness(70.0)
-            self.spinner.setMinimumTrailOpacity(15.0)
-            self.spinner.setTrailFadePercentage(70.0)
-            self.spinner.setNumberOfLines(12)
-            self.spinner.setLineLength(10)
-            self.spinner.setLineWidth(5)
-            self.spinner.setInnerRadius(10)
-            self.spinner.setRevolutionsPerSecond(1)
-            self.spinner.setColor(QColor(51, 219, 18))
-
-            self.spinner.start()
-            layout.addWidget(self.spinner)
-
-            layout.addStretch()
-
-            self.cancel_button = QPushButton("Cancel")
-            self.cancel_button.clicked.connect(self.cancelled.emit)
-
-            button_layout = QHBoxLayout()
-            button_layout.addStretch()
-            button_layout.addWidget(self.cancel_button)
-            button_layout.addStretch()
-            layout.addLayout(button_layout)
-
-            self.setLayout(layout)
-
-    def to_qimage(arr):
-        if arr.ndim == 2:
-            if arr.dtype == np.uint8:
-                h, w = arr.shape
-                qimg = QImage(arr.data, w, h, w, QImage.Format.Format_Grayscale8)
-                return qimg.copy()
-            a = arr.astype(np.float64)
-            mn, mx = a.min(), a.max()
-            if mx > mn:
-                a = (255.0 * (a - mn) / (mx - mn)).astype(np.uint8)
-            else:
-                a = np.zeros_like(a, dtype=np.uint8)
-            h, w = a.shape
-            qimg = QImage(a.data, w, h, w, QImage.Format.Format_Grayscale8)
-            return qimg.copy()
-        if arr.ndim == 3 and arr.shape[2] == 3:
-            if arr.dtype != np.uint8:
-                a = arr.astype(np.float64)
-                mn, mx = a.min(), a.max()
-                if mx > mn:
-                    a = (255.0 * (a - mn) / (mx - mn)).astype(np.uint8)
-                else:
-                    a = np.zeros_like(a, dtype=np.uint8)
-            else:
-                a = arr
-            h, w, _ = a.shape
-            bytes_per_line = 3 * w
-            qimg = QImage(a.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            return qimg.copy()
-        raise ValueError("Unsupported array shape for display")
-
-    def sigmoid(z):
-        return 1 / (1 + np.exp(-z))
-
-    def auto_segment(path_to_image):
-        model, config = segment.load_model_and_config(os.path.join(os.getcwd(), "./model/segment.pth"))
-        if torch.backends.mps.is_available():
-            model = model.to("mps")
-        print("model device", model.device)
-        pred = model.run_slide_inference(path_to_image)
-        print("Finished auto segmentation!")
-        return sigmoid(pred)
-
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    class VertexHandle(QGraphicsRectItem):
-        def __init__(self, roi, index, pos, size=6):
-            super().__init__(-size / 2, -size / 2, size, size)
-            self.roi = roi
-            self.index = index
-            self.setBrush(QColor(255, 255, 255))
-            self.setPen(QPen(QColor(0, 0, 0), 1))
-            self.setFlags(
-                QGraphicsItem.GraphicsItemFlag.ItemIsMovable
-                | QGraphicsItem.GraphicsItemFlag.ItemSendsScenePositionChanges,
-            )
-            self.setZValue(10)
-            self.setParentItem(roi)
-            self.setPos(pos)
-
-        def itemChange(self, change, value):
-            if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-                if not self.roi.updating:
-                    self.roi.update_vertex(self.index, value)
-            return super().itemChange(change, value)
+    from utils import auto_segment, to_qimage
 
     class SegmentationThread(QThread):
         finished = pyqtSignal(object)  # Emits the segmentation result
@@ -183,9 +58,9 @@ if __name__ == "__main__":
                 # Threshold the predictions.
                 labeled = label(mask)
 
-                debug_img = label2rgb(labeled, bg_label=0)
-                Image.fromarray((debug_img * 255).astype(np.uint8)).save("debug_labeled_mask.png")
-                print("Debug labeled mask saved to: debug_labeled_mask.png")
+                # debug_img = label2rgb(labeled, bg_label=0)
+                # Image.fromarray((debug_img * 255).astype(np.uint8)).save("debug_labeled_mask.png")
+                # print("Debug labeled mask saved to: debug_labeled_mask.png")
 
                 # Convert to ROIs.
                 outlines = outlines_list(labeled)
@@ -215,119 +90,6 @@ if __name__ == "__main__":
                 print(f"OilRedOQuantificationThread error: {e}")
                 print(traceback.format_exc())
                 self.error.emit(str(e))
-
-    class PolygonROI(QGraphicsPolygonItem):
-        def __init__(self, points):
-            super().__init__(QPolygonF([QPointF(x, y) for x, y in points]))
-            self.pts = points
-            self.setPen(QPen(QColor(0, 255, 0), 2))
-            self.setBrush(QColor(0, 255, 0, 40))
-            self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-            self.updating = False
-            self.handles = []
-            self.build_handles()
-
-        def paint(self, painter, option, widget=None):
-            # Remove the selection rectangle by clearing the selection state
-            option.state &= ~QStyle.StateFlag.State_Selected
-            super().paint(painter, option, widget)
-
-        def build_handles(self):
-            for h in self.handles:
-                h.setParentItem(None)
-                if self.scene():
-                    self.scene().removeItem(h)
-            self.handles = []
-            poly = self.polygon()
-            for i in range(len(poly)):
-                p = poly.at(i)
-                h = VertexHandle(self, i, p, size=6)
-                self.handles.append(h)
-
-        def refresh_handles(self):
-            poly = self.polygon()
-            self.updating = True
-            for i, h in enumerate(self.handles):
-                if i < len(poly):
-                    h.index = i
-                    h.setPos(poly.at(i))
-            self.updating = False
-
-        def update_vertex(self, index, pos):
-            self.updating = True
-            poly = self.polygon()
-            if 0 <= index < len(poly):
-                poly[index] = QPointF(pos.x(), pos.y())
-                self.setPolygon(poly)
-            self.updating = False
-            self.refresh_handles()
-
-        def itemChange(self, change, value):
-            if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
-                if value:  # Selected
-                    self.setPen(QPen(QColor(255, 0, 0), 2))
-                    self.setBrush(QColor(255, 0, 0, 40))
-
-                    # --- NEW CODE: print and pickle the selected polygon ---
-                    poly = self.polygon()
-                    pts = [(poly.at(i).x(), poly.at(i).y()) for i in range(len(poly))]
-                    print("\nSelected polygon points:")
-                    print(pts)
-                    # -------------------------------------------------------
-                else:  # Deselected
-                    self.setPen(QPen(QColor(0, 255, 0), 2))
-                    self.setBrush(QColor(0, 255, 0, 40))
-            return super().itemChange(change, value)
-
-    class GraphicsView(QGraphicsView):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.setRenderHints(self.renderHints())
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            self.drawing = False
-            self.on_add_point = None
-            self.on_finish_polygon = None
-            self.on_move_pointer = None
-
-        def setDrawingMode(self, enabled):
-            self.drawing = enabled
-            if enabled:
-                self.setDragMode(QGraphicsView.DragMode.NoDrag)
-                self.setCursor(Qt.CursorShape.CrossCursor)
-            else:
-                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-
-        def wheelEvent(self, event):
-            if event.buttons() != Qt.MouseButton.NoButton:
-                return
-            angle = event.angleDelta().y()
-            if angle == 0:
-                return
-            factor = 1.1 if angle > 0 else 1 / 1.1
-            self.scale(factor, factor)
-
-        def mousePressEvent(self, event):
-            if self.drawing:
-                if event.button() == Qt.MouseButton.LeftButton:
-                    pos = self.mapToScene(event.position().toPoint())
-                    if self.on_add_point:
-                        self.on_add_point(pos)
-                return
-            super().mousePressEvent(event)
-
-        def mouseDoubleClickEvent(self, event):
-            if self.drawing:
-                if self.on_finish_polygon:
-                    self.on_finish_polygon()
-                return
-            super().mouseDoubleClickEvent(event)
-
-        def mouseMoveEvent(self, event):
-            if self.drawing and self.on_move_pointer:
-                pos = self.mapToScene(event.position().toPoint())
-                self.on_move_pointer(pos)
-            super().mouseMoveEvent(event)
 
     class MainWindow(QMainWindow):
         def __init__(self):
