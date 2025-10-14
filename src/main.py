@@ -388,16 +388,12 @@ if __name__ == "__main__":
             self.oil_red_o_thread.error.connect(self.on_quantification_error)
             self.oil_red_o_thread.start()
 
-            self.progress_dialog = ProgressDialog(self, "Quantification", "Quantifying Oil Red O Coverage...")
-            self.progress_dialog.cancelled.connect(self.cancel_quantification)
-            self.progress_dialog.show()
+            self.show_progress("Segmentation", "Performing automatic segmentation...")
 
             self.save_segmentation_masks()
 
         def on_quantification_finished(self, results: OilRedOQuantificationResults):
-            if self.progress_dialog:
-                self.progress_dialog.close()
-                self.progress_dialog = None
+            self.hide_progress()
             if self.cancelled:
                 self.cancelled = False
                 return
@@ -422,12 +418,6 @@ if __name__ == "__main__":
 
             QMessageBox.information(self, "Result", f"Saving results to {save_path}\n{result_string}")
 
-        def cancel_quantification(self):
-            self.cancelled = True
-            if self.progress_dialog:
-                self.progress_dialog.close()
-                self.progress_dialog = None
-
         @property
         def image_name(self):
             return self.image_path.split("/")[-1].split(".")[0]
@@ -441,9 +431,7 @@ if __name__ == "__main__":
                 pickle.dump(all_points, f)
 
         def on_quantification_error(self, error_msg):
-            if self.progress_dialog:
-                self.progress_dialog.close()
-                self.progress_dialog = None
+            self.hide_progress()
 
             QMessageBox.critical(self, "Segmentation Error", f"Failed to segment image:\n{error_msg}")
 
@@ -591,9 +579,7 @@ if __name__ == "__main__":
 
             # Create custom progress dialog
             self.cancelled = False
-            self.progress_dialog = ProgressDialog(self, "Segmentation", "Performing automatic segmentation...")
-            self.progress_dialog.cancelled.connect(self.cancel_segmentation)
-            self.progress_dialog.show()
+            self.show_progress("Segmentation", "Performing automatic segmentation...")
 
             # Create and start segmentation thread
             self.segmentation_thread = SegmentationThread(self.image_path)
@@ -601,20 +587,12 @@ if __name__ == "__main__":
             self.segmentation_thread.error.connect(self.on_segmentation_error)
             self.segmentation_thread.start()
 
-        def cancel_segmentation(self):
-            self.cancelled = True
-            if self.progress_dialog:
-                self.progress_dialog.close()
-                self.progress_dialog = None
-
         def on_segmentation_finished(self, outlines):
             if self.cancelled:
                 self.cancelled = False
                 return
 
-            if self.progress_dialog:
-                self.progress_dialog.close()
-                self.progress_dialog = None
+            self.hide_progress()
 
             for roi in list(self.rois):
                 self.scene.removeItem(roi)
@@ -643,11 +621,30 @@ if __name__ == "__main__":
             if self.cancelled:
                 return
 
+            self.hide_progress()
+
+            QMessageBox.critical(self, "Segmentation Error", f"Failed to segment image:\n{error_msg}")
+
+        def show_progress(self, title, message):
+            """Show a progress dialog with the given title and message."""
+            if self.progress_dialog:
+                self.progress_dialog.close()
+
+            self.cancelled = False
+            self.progress_dialog = ProgressDialog(self, title, message)
+            self.progress_dialog.cancelled.connect(self._on_progress_cancelled)
+            self.progress_dialog.show()
+
+        def hide_progress(self):
+            """Hide and cleanup the progress dialog."""
             if self.progress_dialog:
                 self.progress_dialog.close()
                 self.progress_dialog = None
 
-            QMessageBox.critical(self, "Segmentation Error", f"Failed to segment image:\n{error_msg}")
+        def _on_progress_cancelled(self):
+            """Handle progress dialog cancellation."""
+            self.cancelled = True
+            self.hide_progress()
 
         def get_cropped_image(self):
             if self.image_array is None or len(self.rois) == 0:
@@ -692,7 +689,3 @@ if __name__ == "__main__":
     w.resize(QSize(1000, 700))
     w.show()
     sys.exit(app.exec())
-
-    # Segmentation:     10 seconds
-    # Post-processing:  15 seconds
-    # Human editing:    5 minutes, 27 seconds
