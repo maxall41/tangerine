@@ -1,12 +1,14 @@
-import traceback
-
-from colors import OilRedOQuantificationResults
-
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+    import traceback
     import warnings
 
+    from colors import OilRedOQuantificationResults
+
     warnings.filterwarnings("ignore")
-    print("Starting tangerine...")
+    print("Starting Tangerine...")
     print("This may take a few seconds")
     import os
     import pickle
@@ -14,7 +16,6 @@ if __name__ == "__main__":
     from pathlib import Path
 
     import numpy as np
-    import tifffile
     from PIL import Image, ImageDraw
     from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QThread, pyqtSignal
     from PyQt6.QtGui import QAction, QColor, QPainterPath, QPen, QPixmap
@@ -35,8 +36,8 @@ if __name__ == "__main__":
 
     from colors import quantify_oil_red_o_stain
     from gui import GraphicsView, PolygonROI, ProgressDialog
-    from shapes import outlines_list, polygon_area
-    from utils import auto_segment, to_qimage
+    from shapes import outlines_list
+    from utils import auto_segment, get_save_path, to_qimage
 
     class SegmentationThread(QThread):
         finished = pyqtSignal(object)  # Emits the segmentation result
@@ -65,7 +66,6 @@ if __name__ == "__main__":
 
                 # Convert to ROIs.
                 outlines = outlines_list(labeled)
-                outlines = [o for o in outlines if o.shape[0]]
                 self.finished.emit(outlines)
             except Exception as e:
                 self.error.emit(str(e))
@@ -151,7 +151,7 @@ if __name__ == "__main__":
             self.oil_red_o_thread.error.connect(self.on_quantification_error)
             self.oil_red_o_thread.start()
 
-            self.show_progress("Segmentation", "Performing automatic segmentation...")
+            self.show_progress("Quantification", "Performing Oil Red O quantification...")
 
             self.save_segmentation_masks()
 
@@ -172,9 +172,12 @@ if __name__ == "__main__":
 
             result_string = f"Oil Red O area coverage: {results.oil_red_o_percent_coverage:.3}%\nOil Red O Droplet Count: {results.oil_red_o_droplet_count}\nOil Red O Mean Droplet Area: {results.oil_red_o_droplet_mean_area:.3}px"
 
-            results_directory = Path("./results/")
+            results_directory = get_save_path(Path("./results/"))
+            if results_directory is None:
+                print("Failed to get save directory")
+                return
             save_path = results_directory / Path(self.image_name + ".txt")
-            os.makedirs("./results/", exist_ok=True)
+            os.makedirs(results_directory, exist_ok=True)
 
             with open(save_path, "w") as file:
                 file.write(result_string)
@@ -186,12 +189,25 @@ if __name__ == "__main__":
             return self.image_path.split("/")[-1].split(".")[0]
 
         def save_segmentation_masks(self):
-            save_directory = Path("./segmentation_rois/")
+            """Save segmentation masks including hole information."""
+            save_directory = get_save_path(Path("./segmentation_rois/"))
+            if save_directory is None:
+                print("Failed to get save directory | save_segmentation_masks")
+                return
             os.makedirs(save_directory, exist_ok=True)
             save_path = save_directory / Path(self.image_name + ".pkl")
-            all_points = [roi.pts for roi in self.rois]
+
+            # Save both exterior points and holes for each ROI
+            all_rois_data = []
+            for roi in self.rois:
+                roi_data = {
+                    "exterior": roi.pts,
+                    "holes": roi.holes,
+                }
+                all_rois_data.append(roi_data)
+
             with open(save_path, "wb") as f:
-                pickle.dump(all_points, f)
+                pickle.dump(all_rois_data, f)
 
         def on_quantification_error(self, error_msg):
             self.hide_progress()
@@ -221,6 +237,8 @@ if __name__ == "__main__":
 
                 white_mask = np.all(arr == 255, axis=-1)
                 black_mask = np.all(arr == 0, axis=-1)
+                if np.sum(black_mask) > 100:  # Don't perform for black background images
+                    black_mask = np.zeros_like(black_mask)
                 replace_mask = white_mask | black_mask
                 arr[replace_mask] = np.array([128, 128, 128])
 
@@ -237,10 +255,6 @@ if __name__ == "__main__":
             self.scene.setSceneRect(QRectF(0, 0, pix.width(), pix.height()))
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.update_actions()
-
-            with tifffile.TiffFile(path) as tif:
-                data = tif.asarray()
-            tifffile.imwrite(path, data, extratags=[(65326, "s", 0, "1", True)])
 
         def toggle_draw_mode(self):
             if self.image_array is None:
@@ -355,6 +369,7 @@ if __name__ == "__main__":
             self.segmentation_thread.start()
 
         def on_segmentation_finished(self, outlines):
+            """Outlines is now a list of Shapely Polygon objects with holes."""
             if self.cancelled:
                 self.cancelled = False
                 return
@@ -365,20 +380,26 @@ if __name__ == "__main__":
                 self.scene.removeItem(roi)
             self.rois = []
 
-            for pts in outlines:
-                simplified_pts = approximate_polygon(pts, tolerance=8.0)
+            for shapely_poly in outlines:
+                # Extract exterior coordinates
+                exterior_coords = np.array(shapely_poly.exterior.coords)
+                simplified_exterior = approximate_polygon(exterior_coords, tolerance=8.0)
 
-                if len(simplified_pts) < 3:
+                if len(simplified_exterior) < 3:
                     continue
 
-                # 2. Calculate the area of the current polygon.
-                area = polygon_area(simplified_pts)
+                # Extract holes (interiors)
+                holes = []
+                for interior in shapely_poly.interiors:
+                    hole_coords = np.array(interior.coords)
+                    simplified_hole = approximate_polygon(hole_coords, tolerance=8.0)
+                    if len(simplified_hole) >= 3:
+                        holes.append(simplified_hole.tolist())
 
-                # 3. Check if the area meets the threshold before adding it.
-                if area >= 100:
-                    roi = PolygonROI(simplified_pts.tolist())
-                    self.scene.addItem(roi)
-                    self.rois.append(roi)
+                # Create ROI with holes
+                roi = PolygonROI(simplified_exterior.tolist(), holes=holes)
+                self.scene.addItem(roi)
+                self.rois.append(roi)
 
             print("Finished region fitting!")
             self.save_segmentation_masks()
@@ -414,23 +435,37 @@ if __name__ == "__main__":
             self.hide_progress()
 
         def get_cropped_image(self):
+            """Create a cropped image with holes properly cut out."""
             if self.image_array is None or len(self.rois) == 0:
                 return None
+
             h = self.image_array.shape[0]
             w = self.image_array.shape[1]
+
+            # Create mask image
             mask_img = Image.new("L", (w, h), 0)
             draw = ImageDraw.Draw(mask_img)
+
             for roi in self.rois:
+                # Draw the exterior polygon
                 poly = roi.polygon()
                 pts = [(int(poly.at(i).x()), int(poly.at(i).y())) for i in range(len(poly))]
                 draw.polygon(pts, fill=255)
+
+                # Draw holes in black to cut them out
+                for hole_pts in roi.holes:
+                    hole_coords = [(int(p[0]), int(p[1])) for p in hole_pts]
+                    draw.polygon(hole_coords, fill=0)
+
             mask = np.array(mask_img, dtype=np.uint8)
             m = (mask > 0).astype(np.uint8)
+
             arr = self.image_array
             if arr.ndim == 2:
                 out = (arr * m).astype(arr.dtype)
             else:
                 out = (arr * m[..., None]).astype(arr.dtype)
+
             return out
 
         def save_cropped(self):
@@ -452,6 +487,8 @@ if __name__ == "__main__":
                 QMessageBox.critical(self, "Error", f"Failed to save image:\n{e}")
 
     app = QApplication(sys.argv)
+    app.setApplicationName("Tangerine")
+    app.setApplicationDisplayName("Tangerine")
     w = MainWindow()
     w.resize(QSize(1000, 700))
     w.show()

@@ -1,9 +1,13 @@
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image
 from PyQt6.QtGui import QImage
-from slideflow import segment
+
+from segmentation import load_model_and_config
 
 
 def to_qimage(arr):
@@ -42,12 +46,35 @@ def sigmoid(z):
     return 1 / (1 + np.exp(-z))
 
 
+def resource_path(relative_path):
+    base_path = os.path.dirname(__file__) if getattr(sys, "frozen", False) else Path.cwd()
+    return os.path.join(base_path, relative_path)
+
+
+def get_save_path(out_path: Path) -> Path | None:
+    # Try Desktop, Documents, then home directory
+    for base in ["Desktop", "Documents", ""]:
+        try:
+            save_dir = Path.home() / base / "tangerine_results" / out_path
+            save_dir.mkdir(parents=True, exist_ok=True)
+            # Test write permission
+            (save_dir / ".test").touch()
+            (save_dir / ".test").unlink()
+            return save_dir
+        except (OSError, PermissionError):
+            continue
+
+    return None
+
+
 def auto_segment(path_to_image):
-    model, config = segment.load_model_and_config(os.path.join(os.getcwd(), "./model/segment.pth"))
+    model, _ = load_model_and_config(resource_path("./model/segment.pth"))
     if torch.backends.mps.is_available():
         model = model.to("mps")
     print("model device", model.device)
-    pred = model.run_slide_inference(path_to_image)
+
+    img = np.asarray(Image.open(path_to_image))
+    pred = model.run_tiled_inference(img)
     print("Finished auto segmentation!")
     return sigmoid(pred)
 
